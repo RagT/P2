@@ -1,8 +1,17 @@
+/*
+Raghu Tirumala
+Scheduler.java
+
+This scheduler implements a multi level feedback queue.
+*/
 import java.util.*;
 
 public class Scheduler extends Thread
 {
-   private Vector queue;
+   private Vector queue0;
+   private Vector queue1;
+   private Vector queue2;
+   
    private int timeSlice;
    private static final int DEFAULT_TIME_SLICE = 1000;
 
@@ -43,13 +52,29 @@ public class Scheduler extends Thread
       return false;
    }
 
-   // A new feature added to p161 
-   // Retrieve the current thread's TCB from the queue
+   // Retrieve the current thread's TCB from the queues
+   // Modified to search queue1 and queue2
    public TCB getMyTcb( ) {
       Thread myThread = Thread.currentThread( ); // Get my thread object
-      synchronized( queue ) {
-         for ( int i = 0; i < queue.size( ); i++ ) {
-            TCB tcb = ( TCB )queue.elementAt( i );
+      synchronized( queue0 ) {
+         for ( int i = 0; i < queue0.size( ); i++ ) {
+            TCB tcb = ( TCB )queue0.elementAt( i );
+            Thread thread = tcb.getThread( );
+            if ( thread == myThread ) // if this is my TCB, return it
+               return tcb;
+         }
+      }
+      synchronized( queue1 ) {
+         for ( int i = 0; i < queue1.size( ); i++ ) {
+            TCB tcb = ( TCB )queue1.elementAt( i );
+            Thread thread = tcb.getThread( );
+            if ( thread == myThread ) // if this is my TCB, return it
+               return tcb;
+         }
+      }
+      synchronized( queue2 ) {
+         for ( int i = 0; i < queue2.size( ); i++ ) {
+            TCB tcb = ( TCB )queue2.elementAt( i );
             Thread thread = tcb.getThread( );
             if ( thread == myThread ) // if this is my TCB, return it
                return tcb;
@@ -66,13 +91,17 @@ public class Scheduler extends Thread
 
    public Scheduler( ) {
       timeSlice = DEFAULT_TIME_SLICE;
-      queue = new Vector( );
+      queue0 = new Vector( );
+      queue1 = new Vector( );
+      queue2 = new Vector( );
       initTid( DEFAULT_MAX_THREADS );
    }
 
    public Scheduler( int quantum ) {
       timeSlice = quantum;
-      queue = new Vector( );
+      queue0 = new Vector( );
+      queue1 = new Vector( );
+      queue2 = new Vector( );
       initTid( DEFAULT_MAX_THREADS );
    }
 
@@ -80,7 +109,9 @@ public class Scheduler extends Thread
    // A constructor to receive the max number of threads to be spawned
    public Scheduler( int quantum, int maxThreads ) {
       timeSlice = quantum;
-      queue = new Vector( );
+      queue0 = new Vector( );
+      queue1 = new Vector( );
+      queue2 = new Vector( );
       initTid( maxThreads );
    }
 
@@ -93,14 +124,14 @@ public class Scheduler extends Thread
 
    // A modified addThread of p161 example
    public TCB addThread( Thread t ) {
-      t.setPriority( 2 );
+      //t.setPriority( 2 );
       TCB parentTcb = getMyTcb( ); // get my TCB and find my TID
       int pid = ( parentTcb != null ) ? parentTcb.getTid( ) : -1;
       int tid = getNewTid( ); // get a new TID
       if ( tid == -1)
          return null;
       TCB tcb = new TCB( t, tid, pid ); // create a new TCB
-      queue.add( tcb );
+      queue0.add( tcb ); //add to queue0
       return tcb;
    }
 
@@ -120,43 +151,123 @@ public class Scheduler extends Thread
       } catch ( InterruptedException e ) { }
    }
 
+   private boolean runQueue0(Thread threadToRun){
+      TCB runTCB = (TCB) queue0.elementAt(0); 
+      if(threadCompleted(runTCB, queue0)) {
+         return true;
+      } else {
+         threadToRun = runTCB.getThread();
+         startOrResume(threadToRun);
+         sleepThread(timeSlice/2);  //put the scheduler to sleep and let thread run
+         pushToNextQueue(queue0, queue1, runTCB, threadToRun);
+      }
+      return false;
+   }
+  
+   private boolean runQueue1(Thread threadToRun) {
+      TCB runTCB = (TCB) queue1.elementAt(0); 
+      if(threadCompleted(runTCB, queue0)) {
+         return true;
+      } else {
+         threadToRun = runTCB.getThread();
+         startOrResume(threadToRun);
+         sleepThread(timeSlice/2);  //put the scheduler to sleep and let thread run
+         if(queue0.size() > 0) { //Check for new input
+            handleNewTasks(threadToRun, 1);
+         }
+         sleepThread(timeSlice/2);
+         pushToNextQueue(queue1, queue2, runTCB, threadToRun);
+      }
+      return false;         
+   }
+  
+   private boolean runQueue2(Thread threadToRun) {
+      TCB runTCB = (TCB) queue2.elementAt(0); 
+      if(threadCompleted(runTCB, queue1)) {
+         return true;
+      } else {
+         threadToRun = runTCB.getThread();
+         startOrResume(threadToRun);
+         sleepThread(timeSlice/2);  //put the scheduler to sleep and let thread run
+         if(queue0.size() > 0 || queue1.size() > 0) {
+            handleNewTasks(threadToRun, 2);
+         }
+         sleepThread(timeSlice);
+         sleepThread(timeSlice/2);
+         pushToNextQueue(queue2, queue2, runTCB, threadToRun);
+      }
+      return false;      
+   }
+   
+   //Pushes any incomplete threads in current queue to the next queue 
+   private void pushToNextQueue(Vector currentQueue, Vector nextQueue, TCB currTCB, Thread threadToPush){
+     synchronized (currentQueue) {
+        if(threadToPush != null && threadToPush.isAlive( )) {
+          threadToPush.suspend();                      
+          currentQueue.remove(currTCB);           
+          nextQueue.add(currTCB);              
+        }
+     }
+   }
+   
+   //Checks if thread with TCB provided has completed execution.
+   //Removes tcb from queue and return true if execution completed.
+   //Returns false otherwise.
+   private boolean threadCompleted(TCB tcbToCheck, Vector queue) {
+      if(tcbToCheck.getTerminated()){
+         queue.remove(tcbToCheck); 
+         returnTid(tcbToCheck.getTid()); //update thread id array
+         return true;  
+      }
+      return false;
+   }
+   
+   //Starts or resumes thread passed in as parameter   
+   private void startOrResume(Thread threadToRun) {
+      if(threadToRun != null) {
+         if(threadToRun.isAlive()){
+            threadToRun.resume();
+         } else {
+            threadToRun.start();
+         }
+      }
+   }
+   
+   private void handleNewTasks(Thread threadToPause, int queueNum) {
+     if(threadToPause != null && threadToPause.isAlive()) {
+        threadToPause.suspend();
+        Thread newTask = null;
+        runQueue0(newTask);
+        if(queueNum == 2) {
+           Thread newTask2 = null;
+           runQueue1(newTask2);        
+        }
+        threadToPause.resume();
+     }
+   }
+   
    // A modified run of p161
    public void run( ) {
       Thread current = null;
 
-      this.setPriority( 6 );
-
       while ( true ) {
          try {
-            // get the next TCB and its thrad
-            if ( queue.size( ) == 0 )
+            if(queue0.size() == 0 && queue1.size() == 0 && queue2.size() == 0) {
+              continue;
+            }
+            if(queue0.size() > 0){
+               runQueue0(current);
+               continue;  
+            }
+            if(queue0.size() == 0 && queue1.size() > 0) {
+               runQueue1(current);
                continue;
-            TCB currentTCB = (TCB)queue.firstElement( );
-            if ( currentTCB.getTerminated( ) == true ) {
-               queue.remove( currentTCB );
-               returnTid( currentTCB.getTid( ) );
+            }
+            if(queue0.size() == 0 && queue1.size() == 0 && queue2.size() > 0) {
+               runQueue2(current);
                continue;
             }
-            current = currentTCB.getThread( );
-            // if the thread has been started already
-            if ( current != null ) {
-               if ( current.isAlive( ) == false ) {
-                  // Spawn must be controlled by Scheduler
-                  // Scheduler must start a new thread
-                  current.start( ); 
-               }
-               current.setPriority( 4 );
-            }
-
-            schedulerSleep( );
-            // System.out.println("* * * Context Switch * * * ");
-
-            synchronized ( queue ) {
-               if ( current != null && current.isAlive( ) )
-                  current.setPriority( 2 );
-               queue.remove( currentTCB ); // rotate this TCB to the end
-               queue.add( currentTCB );
-            }
+            
          } catch ( NullPointerException e3 ) { };
       } // while
    } // run
