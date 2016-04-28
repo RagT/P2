@@ -4,6 +4,7 @@ Scheduler.java
 
 This scheduler implements a multi level feedback queue.
 */
+
 import java.util.*;
 
 public class Scheduler extends Thread
@@ -151,6 +152,13 @@ public class Scheduler extends Thread
       } catch ( InterruptedException e ) { }
    }
 
+   /*
+   Run queue methods
+   
+   Each of these methods takes the first element in their respective queues and
+   runs that thread for that queues time quantum. Queue1 and Queue2 check for any new 
+   higher priority threads in the middle of their respective time quantums.
+   */
    private boolean runQueue0(Thread threadToRun){
       TCB runTCB = (TCB) queue0.elementAt(0); 
       if(threadCompleted(runTCB, queue0)) {
@@ -166,14 +174,17 @@ public class Scheduler extends Thread
   
    private boolean runQueue1(Thread threadToRun) {
       TCB runTCB = (TCB) queue1.elementAt(0); 
-      if(threadCompleted(runTCB, queue0)) {
+      if(threadCompleted(runTCB, queue1)) {
          return true;
       } else {
          threadToRun = runTCB.getThread();
          startOrResume(threadToRun);
          sleepThread(timeSlice/2);  //put the scheduler to sleep and let thread run
          if(queue0.size() > 0) { //Check for new input
-            handleNewTasks(threadToRun, 1);
+            threadToRun.suspend();
+            Thread newTask = null;
+            runQueue0(newTask);
+            threadToRun.resume();
          }
          sleepThread(timeSlice/2);
          pushToNextQueue(queue1, queue2, runTCB, threadToRun);
@@ -183,29 +194,40 @@ public class Scheduler extends Thread
   
    private boolean runQueue2(Thread threadToRun) {
       TCB runTCB = (TCB) queue2.elementAt(0); 
-      if(threadCompleted(runTCB, queue1)) {
+      if(threadCompleted(runTCB, queue2)) {
          return true;
       } else {
          threadToRun = runTCB.getThread();
          startOrResume(threadToRun);
-         sleepThread(timeSlice/2);  //put the scheduler to sleep and let thread run
-         if(queue0.size() > 0 || queue1.size() > 0) {
-            handleNewTasks(threadToRun, 2);
+         sleepThread(timeSlice/2);  //put the scheduler to sleep and let thread run 
+                                    //for one Q0 time quantum
+         if(queue0.size() > 0) { //Check for new input
+            threadToRun.suspend();
+            Thread newTask = null;
+            runQueue0(newTask);
+            threadToRun.resume();
+         }
+         sleepThread(timeSlice/2);
+         if(queue1.size() > 0) {
+            threadToRun.suspend();
+            Thread newTask = null;
+            runQueue1(newTask);
+            threadToRun.resume();
          }
          sleepThread(timeSlice);
-         sleepThread(timeSlice/2);
+         
          pushToNextQueue(queue2, queue2, runTCB, threadToRun);
       }
       return false;      
    }
    
    //Pushes any incomplete threads in current queue to the next queue 
-   private void pushToNextQueue(Vector currentQueue, Vector nextQueue, TCB currTCB, Thread threadToPush){
+   private void pushToNextQueue(Vector currentQueue, Vector nextQueue, TCB runTCB, Thread threadToPush){
      synchronized (currentQueue) {
         if(threadToPush != null && threadToPush.isAlive( )) {
           threadToPush.suspend();                      
-          currentQueue.remove(currTCB);           
-          nextQueue.add(currTCB);              
+          currentQueue.remove(runTCB);           
+          nextQueue.add(runTCB);              
         }
      }
    }
@@ -231,19 +253,6 @@ public class Scheduler extends Thread
             threadToRun.start();
          }
       }
-   }
-   
-   private void handleNewTasks(Thread threadToPause, int queueNum) {
-     if(threadToPause != null && threadToPause.isAlive()) {
-        threadToPause.suspend();
-        Thread newTask = null;
-        runQueue0(newTask);
-        if(queueNum == 2) {
-           Thread newTask2 = null;
-           runQueue1(newTask2);        
-        }
-        threadToPause.resume();
-     }
    }
    
    // A modified run of p161
